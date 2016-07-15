@@ -51,11 +51,11 @@ console.log(hexdump(buf, {
 {% endhighlight %}
 
 {% highlight sh %}
-- offset -   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
-0x00000000  7f 45 4c 46 01 01 01 00 00 00 00 00 00 00 00 00  .ELF............
-0x00000010  03 00 28 00 01 00 00 00 00 00 00 00 34 00 00 00  ..(.........4...
-0x00000020  34 a8 04 00 00 00 00 05 34 00 20 00 08 00 28 00  4.......4. ...(.
-0x00000030  1e 00 1d 00 06 00 00 00 34 00 00 00 34 00 00 00  ........4...4...
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  7f 45 4c 46 01 01 01 00 00 00 00 00 00 00 00 00  .ELF............
+00000010  03 00 28 00 01 00 00 00 00 00 00 00 34 00 00 00  ..(.........4...
+00000020  34 a8 04 00 00 00 00 05 34 00 20 00 08 00 28 00  4.......4. ...(.
+00000030  1e 00 1d 00 06 00 00 00 34 00 00 00 34 00 00 00  ........4...4...
 {% endhighlight %}
 
 +   `int64(v)`: short-hand for `new Int64(v)`
@@ -1189,13 +1189,47 @@ var sound = new ObjC.Object(ptr("0x1234"));
 >   -   `$className`: string containing the class name of this object
 >   -   `$protocols`: object mapping protocol name to `ObjC.Protocol` instance
 >       for each of the protocols that this object conforms to
->   -   `$methods`: array containing native method names exposed by this object
+>   -   `$methods`: array containing native method names exposed by this object's
+>       class and parent classes
+>   -   `$ownMethods`: array containing native method names exposed by this object's
+>       class, not including parent classes
+>   -   `$ivars`: object mapping each instance variable name to its current
+>       value, allowing you to read and write each through access and assignment
 >
 >   There is also an `equals(other)` method for checking whether two instances
 >   refer to the same underlying object.
 
 +   `new ObjC.Protocol(handle)`: create a JavaScript binding given the existing
     protocol at `handle` (a NativePointer).
+
++   `new ObjC.Block(target)`: create a JavaScript binding given the existing
+    block at `target` (a NativePointer), or, to define a new block, `target`
+    should be an object specifying the type signature and JavaScript function to
+    call whenever the block is invoked. The function is specified with an
+    `implementation` key, and the signature is specified either through a
+    `types` key, or through the `retType` and `argTypes` keys. See
+    `ObjC.registerClass()` for details.
+
+    The most common use-case is hooking an existing block, which for a block
+    expecting two arguments would look something like:
+
+{% highlight js %}
+const pendingBlocks = new Set();
+
+Interceptor.attach(..., {
+  onEnter(args) {
+    const block = new ObjC.Block(args[4]);
+    pendingBlocks.add(block); // Keep it alive
+    const appCallback = block.implementation;
+    block.implementation = (error, value) => {
+      // Do your logging here
+      const result = appCallback(error, value);
+      pendingBlocks.delete(block);
+      return result;
+    };
+  }
+});
+{% endhighlight %}
 
 +   `ObjC.implement(method, fn)`: create a JavaScript implementation compatible
     with the signature of `method`, where the JavaScript function `fn` is used
@@ -1275,7 +1309,7 @@ Interceptor.attach(method.implementation, {
 });
 {% endhighlight %}
 
-+   `ObjC.registerclass(properties)`: create a new Objective-C class, where
++   `ObjC.registerClass(properties)`: create a new Objective-C class, where
     `properties` is an object specifying:
 
     -   `name`: (optional) String specifying the name of the class; omit this
@@ -1347,6 +1381,49 @@ const MyConnectionDelegateProxy = ObjC.registerClass({
 const proxy = MyConnectionDelegateProxy.alloc().init();
 /* use `proxy`, and later: */
 proxy.release();
+{% endhighlight %}
+
++   `ObjC.registerProtocol(properties)`: create a new Objective-C protocol,
+    where `properties` is an object specifying:
+
+    -   `name`: (optional) String specifying the name of the protocol; omit this
+        if you don't care about the globally visible name and would like the
+        runtime to auto-generate one for you.
+    -   `protocols`: (optional) Array of protocols this protocol incorporates.
+    -   `methods`: (optional) Object specifying methods to declare.
+
+{% highlight js %}
+const MyDataDelegate = ObjC.registerProtocol({
+  name: 'MyDataDelegate',
+  protocols: [ObjC.protocols.NSURLConnectionDataDelegate],
+  methods: {
+    /* You must specify the signature: */
+    '- connection:didStuff:': {
+      retType: 'void',
+      argTypes: ['object', 'object']
+    },
+    /* Or grab it from a method of an existing class: */
+    '- connection:didStuff:': {
+      types: ObjC.classes
+          .Foo['- connection:didReceiveResponse:'].types
+    },
+    /* Or from an existing protocol method: */
+    '- connection:didStuff:': {
+      types: ObjC.protocols.NSURLConnectionDataDelegate
+          .methods['- connection:didReceiveResponse:'].types
+    },
+    /* Or write the signature by hand if you really want to: */
+    '- connection:didStuff:': {
+      types: 'v32@0:8@16@24'
+    },
+    /* You can also make a method optional (default is required): */
+    '- connection:didStuff:': {
+      retType: 'void',
+      argTypes: ['object', 'object'],
+      optional: true
+    }
+  }
+});
 {% endhighlight %}
 
 +   `ObjC.bind(obj, data)`: bind some JavaScript data to an Objective-C
